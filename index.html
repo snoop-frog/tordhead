@@ -6,7 +6,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Bobbly Head Speaking with Reversible Playback</title>
   <style>
-    /* Remove default margins and ensure the document fills the viewport */
     html, body {
       margin: 0;
       padding: 0;
@@ -15,8 +14,7 @@
       background: #222;
       font-family: sans-serif;
     }
-    /* The video will be centered and scaled to fully fit inside the viewport.
-       It will fill the shorter dimension (width or height) while maintaining aspect ratio. */
+    /* The video is centered and scaled to fully display (no cropping) */
     #bobVideo {
       position: fixed;
       top: 50%;
@@ -28,7 +26,7 @@
       background: #000;
       z-index: 1;
     }
-    /* Center the start button over the video */
+    /* The start button is centered on top of the video */
     #startButton {
       position: absolute;
       top: 50%;
@@ -48,7 +46,7 @@
 <body>
   <!-- Start button overlay -->
   <button id="startButton">Start</button>
-  <!-- Video element (without loop; we control its boundaries) -->
+  <!-- Video element (we do not use loop since we control its boundaries) -->
   <video id="bobVideo"
          src="https://github.com/snoop-frog/tordhead/raw/refs/heads/main/output%20(43).mp4"
          muted
@@ -59,7 +57,7 @@
     const startButton = document.getElementById('startButton');
     const video = document.getElementById('bobVideo');
 
-    // Speech detection parameters (sensitivity kept the same)
+    // Speech detection parameters (unchanged sensitivity)
     const THRESHOLD = 0.02;           // Above this, consider speaking started.
     const THRESHOLD_HYSTERESIS = 0.02;  // Below this, consider speaking stopped.
     let speakingDetected = false;
@@ -74,57 +72,31 @@
     function checkReverseSupport() {
       video.playbackRate = -1;
       canPlayReverse = (video.playbackRate < 0);
-      // Reset to forward playback.
       video.playbackRate = forwardSpeed;
       console.log("Negative playbackRate supported:", canPlayReverse);
     }
 
-    // --- Native playback mode with immediate direction switching ---
-    function onTimeUpdate() {
-      // When playing forward and nearly at the video's end:
-      if (direction > 0 && video.currentTime >= video.duration - 0.1) {
+    // --- Continuously monitor video position and switch direction immediately ---
+    function monitorVideo() {
+      // Use a small threshold (e.g., 0.05 seconds) to detect boundaries.
+      const threshold = 0.05;
+      if (direction > 0 && video.currentTime >= video.duration - threshold) {
+        // Reached the end – immediately reverse.
+        direction = -1;
+        video.currentTime = video.duration; // Clamp to end.
         if (canPlayReverse) {
-          direction = -1;
-          video.currentTime = video.duration; // Clamp to end.
           video.playbackRate = -reverseSpeed;
-          // If speech is still detected and the video isn't already playing, ensure it plays.
-          if (speakingDetected && video.paused) {
-            video.play();
-          }
         } else {
-          // Fallback: manual stepping if negative playbackRate is not supported.
-          manualRewind();
+          // If negative playbackRate isn't supported, we could implement a manual fallback here.
+          video.playbackRate = forwardSpeed;
         }
-      }
-      // When playing in reverse and nearly at the beginning:
-      else if (direction < 0 && video.currentTime <= 0.1) {
+      } else if (direction < 0 && video.currentTime <= threshold) {
+        // Reached the beginning – immediately switch to forward.
         direction = 1;
         video.currentTime = 0; // Clamp to start.
         video.playbackRate = forwardSpeed;
-        if (speakingDetected && video.paused) {
-          video.play();
-        }
       }
-    }
-
-    video.addEventListener('timeupdate', onTimeUpdate);
-
-    // --- Fallback manual reverse if negative playbackRate is unsupported ---
-    let manualRewindInterval = null;
-    function manualRewind() {
-      if (manualRewindInterval) clearInterval(manualRewindInterval);
-      manualRewindInterval = setInterval(() => {
-        video.currentTime = Math.max(0, video.currentTime - 0.04 * reverseSpeed);
-        if (video.currentTime <= 0) {
-          clearInterval(manualRewindInterval);
-          manualRewindInterval = null;
-          direction = 1;
-          video.playbackRate = forwardSpeed;
-          if (speakingDetected && video.paused) {
-            video.play();
-          }
-        }
-      }, 16); // Approximately 60fps.
+      requestAnimationFrame(monitorVideo);
     }
 
     // --- Audio Processing for Speech Detection ---
@@ -149,9 +121,12 @@
 
             if (!speakingDetected && rms > THRESHOLD) {
               speakingDetected = true;
+              // Resume playback if the video is paused.
               if (video.paused) {
-                // Resume playback in the current direction immediately.
-                video.playbackRate = direction > 0 ? forwardSpeed : (canPlayReverse ? -reverseSpeed : forwardSpeed);
+                // Set playbackRate based on current direction.
+                video.playbackRate = (direction > 0)
+                  ? forwardSpeed
+                  : (canPlayReverse ? -reverseSpeed : forwardSpeed);
                 video.play();
               }
             } else if (speakingDetected && rms < THRESHOLD_HYSTERESIS) {
@@ -173,6 +148,7 @@
       video.addEventListener('loadedmetadata', () => {
         video.pause();
         checkReverseSupport();
+        monitorVideo();
       });
       initAudioProcessing();
     });
