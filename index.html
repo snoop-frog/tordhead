@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <!-- Ensure proper scaling on mobile devices -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bobbly Head Speaking with Reversible Playback</title>
+  <style>
+    /* Remove default margins and ensure the document fills the viewport */
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      overflow: hidden;
+      background: #222;
+      font-family: sans-serif;
+    }
+    /* The video will be centered and scaled to fully fit inside the viewport.
+       It will fill the shorter dimension (width or height) while maintaining aspect ratio. */
+    #bobVideo {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      background: #000;
+      z-index: 1;
+    }
+    /* Center the start button over the video */
+    #startButton {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 2;
+      padding: 15px 30px;
+      font-size: 20px;
+      cursor: pointer;
+      background: rgba(0, 0, 0, 0.7);
+      color: #fff;
+      border: none;
+      border-radius: 5px;
+    }
+  </style>
+</head>
+<body>
+  <!-- Start button overlay -->
+  <button id="startButton">Start</button>
+  <!-- Video element (without loop; we control its boundaries) -->
+  <video id="bobVideo"
+         src="https://github.com/snoop-frog/tordhead/raw/refs/heads/main/output%20(43).mp4"
+         muted
+         playsinline>
+  </video>
+
+  <script>
+    const startButton = document.getElementById('startButton');
+    const video = document.getElementById('bobVideo');
+
+    // Speech detection parameters (sensitivity kept the same)
+    const THRESHOLD = 0.02;           // Above this, consider speaking started.
+    const THRESHOLD_HYSTERESIS = 0.02;  // Below this, consider speaking stopped.
+    let speakingDetected = false;
+
+    // Playback parameters
+    const forwardSpeed = 1;      // Normal forward playback speed.
+    const reverseSpeed = 1;      // Reverse playback speed magnitude.
+    let direction = 1;           // +1 for forward, -1 for reverse.
+    let canPlayReverse = false;  // Will be determined based on browser support.
+
+    // --- Check if negative playbackRate is supported ---
+    function checkReverseSupport() {
+      video.playbackRate = -1;
+      canPlayReverse = (video.playbackRate < 0);
+      // Reset to forward playback.
+      video.playbackRate = forwardSpeed;
+      console.log("Negative playbackRate supported:", canPlayReverse);
+    }
+
+    // --- Native playback mode with immediate direction switching ---
+    function onTimeUpdate() {
+      // When playing forward and nearly at the video's end:
+      if (direction > 0 && video.currentTime >= video.duration - 0.1) {
+        if (canPlayReverse) {
+          direction = -1;
+          video.currentTime = video.duration; // Clamp to end.
+          video.playbackRate = -reverseSpeed;
+          // If speech is still detected and the video isn't already playing, ensure it plays.
+          if (speakingDetected && video.paused) {
+            video.play();
+          }
+        } else {
+          // Fallback: manual stepping if negative playbackRate is not supported.
+          manualRewind();
+        }
+      }
+      // When playing in reverse and nearly at the beginning:
+      else if (direction < 0 && video.currentTime <= 0.1) {
+        direction = 1;
+        video.currentTime = 0; // Clamp to start.
+        video.playbackRate = forwardSpeed;
+        if (speakingDetected && video.paused) {
+          video.play();
+        }
+      }
+    }
+
+    video.addEventListener('timeupdate', onTimeUpdate);
+
+    // --- Fallback manual reverse if negative playbackRate is unsupported ---
+    let manualRewindInterval = null;
+    function manualRewind() {
+      if (manualRewindInterval) clearInterval(manualRewindInterval);
+      manualRewindInterval = setInterval(() => {
+        video.currentTime = Math.max(0, video.currentTime - 0.04 * reverseSpeed);
+        if (video.currentTime <= 0) {
+          clearInterval(manualRewindInterval);
+          manualRewindInterval = null;
+          direction = 1;
+          video.playbackRate = forwardSpeed;
+          if (speakingDetected && video.paused) {
+            video.play();
+          }
+        }
+      }, 16); // Approximately 60fps.
+    }
+
+    // --- Audio Processing for Speech Detection ---
+    function initAudioProcessing() {
+      navigator.mediaDevices.getUserMedia({ audio: true })
+        .then(stream => {
+          const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+          const analyser = audioContext.createAnalyser();
+          analyser.fftSize = 2048;
+          const microphone = audioContext.createMediaStreamSource(stream);
+          microphone.connect(analyser);
+          const dataArray = new Uint8Array(analyser.fftSize);
+
+          function checkVolume() {
+            analyser.getByteTimeDomainData(dataArray);
+            let sum = 0;
+            for (let i = 0; i < dataArray.length; i++) {
+              const normalized = dataArray[i] / 128 - 1;
+              sum += normalized * normalized;
+            }
+            const rms = Math.sqrt(sum / dataArray.length);
+
+            if (!speakingDetected && rms > THRESHOLD) {
+              speakingDetected = true;
+              if (video.paused) {
+                // Resume playback in the current direction immediately.
+                video.playbackRate = direction > 0 ? forwardSpeed : (canPlayReverse ? -reverseSpeed : forwardSpeed);
+                video.play();
+              }
+            } else if (speakingDetected && rms < THRESHOLD_HYSTERESIS) {
+              speakingDetected = false;
+              video.pause();
+            }
+            requestAnimationFrame(checkVolume);
+          }
+          checkVolume();
+        })
+        .catch(err => {
+          console.error('Error accessing microphone:', err);
+        });
+    }
+
+    // --- Start everything on user gesture ---
+    startButton.addEventListener('click', () => {
+      startButton.style.display = 'none';
+      video.addEventListener('loadedmetadata', () => {
+        video.pause();
+        checkReverseSupport();
+      });
+      initAudioProcessing();
+    });
+  </script>
+</body>
+</html>
